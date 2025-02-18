@@ -1,9 +1,6 @@
-# This is a copy of ci-unix-static.yml for building shared libraries. It differs from ci-unix-static.yml as follows:
-#
-#   * The os matrix consists of ubuntu-24.04 only.
-#   * Does not build rav1e, SVT-AV1 nor libgav1.
+# Workflow that builds libabvif with aom and dav1d, runs tests and generates coverage report.
 
-name: CI Unix Shared Local
+name: CI Linux Code Coverage
 on: [push, pull_request]
 
 permissions:
@@ -15,35 +12,24 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  build-shared-local:
+  build-shared-run-golden-tests:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest]
-        libyuv: [OFF, LOCAL]
-        include:
-          - runs-on: ubuntu-24.04
-            compiler: gcc
-            gcc: 14
-
-    name: build-shared-local (${{ matrix.os }}, libyuv ${{ matrix.libyuv }})
+        os: [ubuntu-24.04]
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: ./.github/actions/setup-linux
-        if: runner.os == 'Linux'
+        id: setup
         with:
           codec-aom: "LOCAL"
           codec-dav1d: "LOCAL"
-          gcc-version: ${{ matrix.gcc }}
           libxml2: "LOCAL"
-          libyuv: ${{ matrix.libyuv }}
-      - uses: ./.github/actions/setup-macos
-        if: runner.os == 'macOS'
-        with:
-          codec-aom: "LOCAL"
-          codec-dav1d: "LOCAL"
+
+      - name: Install LLVM
+        run:  sudo apt install -y llvm
 
       - name: Prepare libavif (cmake)
         run: >
@@ -51,16 +37,27 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
           -DAVIF_CODEC_AOM=LOCAL -DAVIF_CODEC_DAV1D=LOCAL
           -DAVIF_LIBSHARPYUV=LOCAL -DAVIF_LIBXML2=LOCAL
-          -DAVIF_LIBYUV=${{ matrix.libyuv }}
+          -DAVIF_LIBYUV=OFF
           -DAVIF_BUILD_EXAMPLES=ON -DAVIF_BUILD_APPS=ON
           -DAVIF_BUILD_TESTS=ON -DAVIF_GTEST=LOCAL
+          -DAVIF_ENABLE_EXPERIMENTAL_YCGCO_R=ON
           -DAVIF_ENABLE_EXPERIMENTAL_MINI=ON
           -DAVIF_ENABLE_EXPERIMENTAL_SAMPLE_TRANSFORM=ON
           -DAVIF_ENABLE_EXPERIMENTAL_EXTENDED_PIXI=ON
-          -DAVIF_ENABLE_WERROR=ON
+          -DAVIF_ENABLE_WERROR=ON -DAVIF_ENABLE_COVERAGE=ON
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
       - name: Build libavif (ninja)
         working-directory: ./build
         run: ninja
-      - name: Run AVIF Tests
+      - name: Run AVIF coverage
         working-directory: ./build
-        run: ctest -j $(getconf _NPROCESSORS_ONLN) --output-on-failure
+        run: ninja avif_coverage
+
+      # See https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts
+      - name: Archive coverage output
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: coverage-output
+          path:  |
+            ./build/tests/coverage/*
+            ./build/tests/coverage/**/*
